@@ -38,6 +38,8 @@ python -m app.worker
 
 Or start all required processes with `docker compose up -d --build`.
 
+For moving this local installation to a Linux server, follow [the server migration guide](deploy/SERVER_MIGRATION.md). Docker Compose uses its own Redis service and binds the bot's HTTP port to `127.0.0.1:8000`. Local Redis settings do not need to be edited for Docker.
+
 ## One CRM domain
 
 No separate domain or external webhook provider is needed. Keep the Laravel public URL such as `https://crm.example.uz` and add [`deploy/nginx-crm-bot.conf`](deploy/nginx-crm-bot.conf) to its existing HTTPS server block. Nginx forwards `/telegram-bot/` to FastAPI on `127.0.0.1:8000`; Laravel continues serving `/` and `/api/v1`.

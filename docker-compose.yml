@@ -2,21 +2,35 @@ services:
   bot:
     build: .
     env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   worker:
     build: .
     env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
     command: python -m app.worker
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
 
   redis:
     image: redis:7-alpine
