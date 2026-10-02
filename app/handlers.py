@@ -1,24 +1,25 @@
 import logging
 from datetime import datetime
-from io import BytesIO
 from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandStart
+from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, Message
 
+from app.attachments import download_attachment
 from app.crm import CrmApiError, CrmClient
 from app.formatters import after_hours_text, safe_order_text
 from app.keyboards import (
-    confirmation_keyboard,
+    back_keyboard,
     contact_keyboard,
+    intake_keyboard,
     main_menu,
     marketing_keyboard,
-    suggestions_keyboard,
 )
 from app.runtime import runtime_for
 from app.storage import BotStorage
@@ -32,14 +33,8 @@ OPERATOR_WORDS = ("operator", "narx", "tezroq", "bog'lan", "bog‘lan")
 
 
 class Intake(StatesGroup):
-    purpose = State()
-    document_type = State()
-    urgency = State()
-    attachment = State()
-    name = State()
+    request = State()
     contact = State()
-    notes = State()
-    confirmation = State()
 
 
 class OrderVerification(StatesGroup):
@@ -79,10 +74,7 @@ async def _dispatch(storage: BotStorage, crm: CrmClient, action: str, payload: d
 
 
 async def _upload_attachment(bot: Bot, crm: CrmClient, lead_id: int | str, attachment: dict[str, Any]) -> None:
-    file = await bot.get_file(attachment["telegram_file_id"])
-    content = (await bot.download_file(file.file_path, destination=BytesIO())).getvalue()
-    if len(content) > runtime_for(bot).settings.max_upload_bytes:
-        raise ValueError("File is bigger than the configured limit")
+    content = await download_attachment(bot, attachment)
     await crm.upload_attachment(lead_id, attachment, content)
 
 
@@ -101,7 +93,7 @@ async def _create_lead_and_upload(message: Message, payload: dict[str, Any]) -> 
     for attachment in payload.get("attachments", []):
         try:
             await _upload_attachment(message.bot, crm, lead_id, attachment)
-        except (CrmApiError, ValueError):
+        except (CrmApiError, TelegramAPIError, OSError, ValueError):
             await storage.enqueue("attachment", {"lead_id": lead_id, "attachment": attachment})
     return True
 
@@ -141,11 +133,11 @@ async def begin_suggestions(message: Message, state: FSMContext) -> None:
     await state.set_state(Suggestions.text)
     await message.answer(
         "Talab yoki taklifingizni yozing. Murojaatingiz mas’ullarga yuboriladi.",
-        reply_markup=suggestions_keyboard(),
+        reply_markup=back_keyboard(),
     )
 
 
-@router.message(F.text == "🆕 Yangi xizmat")
+@router.message(F.text.in_({"📝 Yangi murojaat", "🆕 Yangi xizmat", "📎 Hujjat yuborish"}))
 async def begin_intake(message: Message, state: FSMContext) -> None:
     previous = await state.get_data()
     await state.clear()
@@ -154,44 +146,44 @@ async def begin_intake(message: Message, state: FSMContext) -> None:
         entry_payload=previous.get("entry_payload"),
         attachments=[],
         transcript=[],
+        notes="",
     )
-    await state.set_state(Intake.purpose)
-    await message.answer("Hujjat qaysi maqsad uchun kerak: o‘qish, ish, chet el, notarial ish yoki boshqa?")
-
-
-@router.message(F.text == "📎 Hujjat yuborish")
-async def begin_document_upload(message: Message, state: FSMContext) -> None:
-    await begin_intake(message, state)
-    await state.update_data(purpose="Hujjat yuborildi", transcript=[{"field": "purpose", "value": "Hujjat yuborildi"}])
-    await state.set_state(Intake.attachment)
-    await message.answer("Hujjat rasmini yoki PDF faylni yuboring. Keyinroq yuborish ham mumkin.")
-
-
-@router.message(Intake.purpose, F.text)
-async def intake_purpose(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await state.update_data(purpose=message.text[:500], transcript=_append(data, "purpose", message.text[:500]))
-    await state.set_state(Intake.document_type)
-    await message.answer("Qaysi hujjat: diplom, pasport, tug‘ilganlik/nikoh guvohnomasi yoki boshqa?")
-
-
-@router.message(Intake.document_type, F.text)
-async def intake_document_type(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await state.update_data(
-        document_type=message.text[:180], transcript=_append(data, "document_type", message.text[:180])
-    )
-    await state.set_state(Intake.urgency)
-    await message.answer("Qachonga kerak? Masalan: odatiy, shoshilinch yoki aniq sana.")
-
-
-@router.message(Intake.urgency, F.text)
-async def intake_urgency(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await state.update_data(urgency=message.text[:120], transcript=_append(data, "urgency", message.text[:120]))
-    await state.set_state(Intake.attachment)
+    await state.set_state(Intake.request)
     await message.answer(
-        "Hujjat rasmini yoki PDF faylni yuboring. Bu majburiy emas — yubormasangiz “Keyin yuboraman” deb yozing."
+        "Kerakli xizmatni qisqacha yozing yoki hujjat rasmini/PDF faylni yuboring.\n"
+        "Masalan: “Diplomni ingliz tiliga tarjima qilish kerak, 3 kun ichida”.\n"
+        "Keyin o‘z kontaktingizni yuborsangiz, murojaatingiz mutaxassisga jo‘natiladi.",
+        reply_markup=back_keyboard(),
+    )
+
+
+@router.message(
+    StateFilter(Intake.request, Intake.contact, Suggestions.text), F.text == "⬅️ Bosh menyu"
+)
+async def return_to_menu(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.clear()
+    await state.update_data(entry_payload=data.get("entry_payload"))
+    await message.answer("Kerakli bo‘limni tanlang.", reply_markup=main_menu())
+
+
+@router.message(StateFilter(Intake.request, Intake.contact), F.text)
+async def intake_text(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("Murojaatingizni yozing yoki hujjat rasmini/PDF faylni yuboring.")
+        return
+    notes = "\n".join(part for part in (data.get("notes", ""), text) if part)
+    if len(notes) > 2000:
+        await message.answer("Murojaat va izohlar jami 2000 belgidan oshmasin. Qisqaroq yozing.")
+        return
+    await state.update_data(notes=notes, transcript=_append(data, "request", text))
+    await state.set_state(Intake.contact)
+    await message.answer(
+        "Qabul qilindi. Yana fayl yoki izoh qo‘shishingiz mumkin. "
+        "Murojaatni jo‘natish uchun pastdagi tugma orqali o‘z kontaktingizni yuboring.",
+        reply_markup=intake_keyboard(),
     )
 
 
@@ -208,6 +200,7 @@ def _attachment_from_message(message: Message) -> dict[str, Any] | None:
             "mime_type": "image/jpeg",
             "size": photo.file_size or 0,
             "kind": "photo",
+            "caption": (message.caption or "").strip()[:2000],
         }
     document = message.document
     if not document or (document.file_size and document.file_size > settings.max_upload_bytes):
@@ -223,33 +216,39 @@ def _attachment_from_message(message: Message) -> dict[str, Any] | None:
         "mime_type": document.mime_type,
         "size": document.file_size or 0,
         "kind": "document",
+        "caption": (message.caption or "").strip()[:2000],
     }
 
 
-@router.message(Intake.attachment, F.photo | F.document)
+@router.message(StateFilter(Intake.request, Intake.contact), F.photo | F.document)
 async def intake_attachment(message: Message, state: FSMContext) -> None:
     attachment = _attachment_from_message(message)
     if not attachment:
         await message.answer("Faqat JPG, PNG yoki PDF yuboring. Fayl hajmi 20 MB dan oshmasin.")
         return
     data = await state.get_data()
-    attachments = list(data.get("attachments", [])) + [attachment]
-    await state.update_data(attachments=attachments, transcript=_append(data, "attachment", attachment["file_name"]))
-    await message.answer("Qabul qilindi. Yana fayl yuborishingiz yoki “Davom etish” deb yozishingiz mumkin.")
-
-
-@router.message(Intake.attachment, F.text)
-async def intake_attachment_finished(message: Message, state: FSMContext) -> None:
-    await state.set_state(Intake.name)
-    await message.answer("Ismingizni yozing.")
-
-
-@router.message(Intake.name, F.text)
-async def intake_name(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await state.update_data(name=message.text[:160], transcript=_append(data, "name", message.text[:160]))
+    attachments = list(data.get("attachments", []))
+    if len(attachments) >= 10:
+        await message.answer("Bitta murojaatga ko‘pi bilan 10 ta fayl qo‘shish mumkin.")
+        return
+    notes = "\n".join(
+        part for part in (data.get("notes", ""), (message.caption or "").strip()) if part
+    )
+    if len(notes) > 2000:
+        await message.answer("Murojaat va izohlar jami 2000 belgidan oshmasin. Izohni qisqartiring.")
+        return
+    attachments.append(attachment)
+    await state.update_data(
+        attachments=attachments,
+        notes=notes,
+        transcript=_append(data, "attachment", attachment["file_name"]),
+    )
     await state.set_state(Intake.contact)
-    await message.answer("Telefon raqamingizni kontakt sifatida yuboring.", reply_markup=contact_keyboard())
+    await message.answer(
+        "Hujjat qabul qilindi. Yana fayl yoki izoh qo‘shishingiz mumkin. "
+        "Murojaatni jo‘natish uchun pastdagi tugma orqali o‘z kontaktingizni yuboring.",
+        reply_markup=intake_keyboard(),
+    )
 
 
 async def _owned_contact(message: Message) -> str | None:
@@ -259,62 +258,40 @@ async def _owned_contact(message: Message) -> str | None:
     return contact.phone_number[:40]
 
 
-@router.message(Intake.contact, F.contact)
-async def intake_contact(message: Message, state: FSMContext) -> None:
+@router.message(StateFilter(Intake.request, Intake.contact), F.contact)
+async def submit_intake(message: Message, state: FSMContext) -> None:
     phone = await _owned_contact(message)
     if not phone:
         await message.answer("Xavfsizlik uchun faqat o‘zingizning Telegram kontaktingizni yuboring.")
         return
     data = await state.get_data()
-    await state.update_data(phone=phone, transcript=_append(data, "phone_confirmed", True))
-    await state.set_state(Intake.notes)
-    await message.answer("Qo‘shimcha izohingiz bo‘lsa yozing. Bo‘lmasa “Yo‘q” deb yuboring.", reply_markup=ReplyKeyboardRemove())
-
-
-@router.message(Intake.contact)
-async def intake_contact_required(message: Message) -> None:
-    await message.answer("Iltimos, pastdagi “Kontaktni yuborish” tugmasi orqali o‘z kontaktingizni yuboring.")
-
-
-@router.message(Intake.notes, F.text)
-async def intake_notes(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    notes = "" if message.text.casefold() in {"yo‘q", "yo'q", "yoq"} else message.text[:2000]
-    await state.update_data(notes=notes, transcript=_append(data, "notes", notes))
-    await state.set_state(Intake.confirmation)
-    await message.answer(
-        "Ma’lumotlaringiz qabul qilishga tayyor. Tasdiqlasangiz, mutaxassis narx va muddatni ko‘rib sizga javob beradi.",
-        reply_markup=confirmation_keyboard(),
-    )
-
-
-@router.message(Intake.confirmation, F.text == "✏️ Qayta boshlash")
-async def restart_intake(message: Message, state: FSMContext) -> None:
-    await begin_intake(message, state)
-
-
-@router.message(Intake.confirmation, F.text == "✅ Tasdiqlayman")
-async def submit_intake(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    if not all(data.get(key) for key in ("name", "phone", "purpose", "document_type", "urgency")):
-        await message.answer("Ma’lumotlar to‘liq emas. Iltimos, qayta boshlang.", reply_markup=main_menu())
-        await state.clear()
+    if not data.get("notes") and not data.get("attachments"):
+        await message.answer("Avval murojaatingizni yozing yoki hujjat rasmini/PDF faylni yuboring.")
         return
+    notes = data.get("notes", "")
     payload = {
         "external_id": data.get("intake_id") or str(uuid4()),
-        "customer": {**_identity(message), "name": data["name"], "phone": data["phone"], "phone_verified": True},
+        "customer": {
+            **_identity(message),
+            "name": message.from_user.full_name[:160],
+            "phone": phone,
+            "phone_verified": True,
+        },
         "source": {"channel": "telegram", "entry_payload": data.get("entry_payload")},
         "request": {
-            "purpose": data["purpose"],
-            "document_type": data["document_type"],
-            "urgency": data["urgency"],
-            "notes": data.get("notes", ""),
+            "mode": "compact",
+            # Keep these fields until the deployed CRM also accepts compact requests.
+            "purpose": notes[:500] or "Hujjat bo‘yicha murojaat",
+            "document_type": "Mutaxassis aniqlashtiradi",
+            "urgency": "Mutaxassis aniqlashtiradi",
+            "notes": notes,
         },
         "attachments": data.get("attachments", []),
-        "transcript": data.get("transcript", []),
+        "transcript": _append(data, "phone_confirmed", True)[:50],
     }
     delivered = await _create_lead_and_upload(message, payload)
     await state.clear()
+    await state.update_data(entry_payload=data.get("entry_payload"))
     text = (
         "Rahmat, so‘rovingiz qabul qilindi. Mutaxassisimiz hujjatingizni ko‘rib, narx va muddat bo‘yicha sizga aloqaga chiqadi."
         if delivered
@@ -322,6 +299,11 @@ async def submit_intake(message: Message, state: FSMContext) -> None:
     )
     await message.answer(text, reply_markup=main_menu())
     await message.answer("Foydali ma’lumotlar va takliflarni olishga rozimisiz?", reply_markup=marketing_keyboard())
+
+
+@router.message(StateFilter(Intake.request, Intake.contact))
+async def intake_message_required(message: Message) -> None:
+    await message.answer("Murojaat matni, JPG/PNG/PDF fayl yoki o‘z kontaktingizni yuboring.")
 
 
 @router.message(F.text == "📦 Buyurtmam")
@@ -396,12 +378,6 @@ async def useful_info(message: Message) -> None:
         await message.answer("Hujjatni yuboring — mutaxassis sizga aynan kerakli tartibni aytadi.", reply_markup=main_menu())
 
 
-@router.message(Suggestions.text, F.text == "⬅️ Bosh menyu")
-async def cancel_suggestions(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer("Kerakli bo‘limni tanlang.", reply_markup=main_menu())
-
-
 @router.message(Suggestions.text, F.text)
 async def submit_suggestion(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
@@ -437,10 +413,9 @@ async def forward_attachment(message: Message) -> None:
     crm, storage = _services(message)
     payload = {**_identity(message), "attachment": attachment, "caption": (message.caption or "")[:2000]}
     try:
-        file = await message.bot.get_file(attachment["telegram_file_id"])
-        content = (await message.bot.download_file(file.file_path, destination=BytesIO())).getvalue()
+        content = await download_attachment(message.bot, attachment)
         await crm.upload_message_attachment(payload, content)
-    except (CrmApiError, OSError, ValueError):
+    except (CrmApiError, TelegramAPIError, OSError, ValueError):
         await storage.enqueue("message_attachment", payload)
     await message.answer("Faylingiz qabul qilindi va mutaxassisga yuborildi.", reply_markup=main_menu())
 

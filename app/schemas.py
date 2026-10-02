@@ -16,3 +16,4 @@ class Attachment(BaseModel):
     mime_type: str | None = None
     size: int
     kind: str
+    caption: str | None = None

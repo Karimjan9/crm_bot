@@ -4,14 +4,18 @@ Python 3.11+ customer bot for the sibling `Crm_document` Laravel project. It use
 
 ## What is implemented
 
-- Telegram deep-link source capture (`/start instagram_korea`), short intake flow, verified own-contact request and optional JPG/PNG/PDF upload;
-- one customer lead per normalized phone is delegated to CRM, with the entire intake transcript and source retained;
+- Telegram deep-link source capture (`/start instagram_korea`), two-step intake, verified own-contact request and optional JPG/PNG/PDF upload;
+- customer matching by normalized phone and idempotent lead creation in CRM, with the intake transcript and source retained;
 - contact-verified order lookup that renders only customer-safe fields;
 - a “Talab va taklif” menu that collects customer requests and suggestions and records them in CRM;
 - operator handoff stops automatic replies and forwards subsequent messages;
 - explicit marketing opt-in/out, editable CRM content, and honest out-of-hours wording;
 - signed CRM-to-bot webhook endpoint, seven-day event idempotency and persistent Redis retry queue;
 - file format/size checks, no direct CRM database access and no secret/phone logging.
+
+The “Yangi murojaat” button combines service requests and document uploads. Customers send a description or up to 10 files, then share their own contact to submit the lead. Their name comes from their Telegram profile. Text and file captions are retained in CRM notes, and each file also retains its own caption. Additional files and comments can be added before sharing the contact. Marketing consent is optional and is requested after submission.
+
+Requests use `request.mode=compact`. The updated CRM allows document type and urgency to be empty for employee clarification and shows the text, verified contact and private files together under “Telegram murojaati” on the leads page. It creates a response task for the assigned employee. The bot keeps the older required fields with “Mutaxassis aniqlashtiradi” until the server is updated; the updated CRM converts those placeholders to empty values.
 
 ## Local run
 
@@ -48,6 +52,8 @@ CRM      → https://crm.example.uz/telegram-bot/crm/webhook
 For production, keep Redis on the private Docker/server network only, protect it with a password and TLS where it crosses a network boundary, and do not enable Redis command access from the Internet. Telegram state is automatically expired after 24 hours; failed retry jobs move to a 30-day dead-letter list.
 
 The required Laravel endpoints are implemented in the sibling `Crm_document` project under `/api/v1/bot/*`. Before deployment, set the matching `CRM_BOT_API_KEY` in both projects and configure the CRM webhook variables listed in that project's `.env.example`.
+
+For the compact intake update, deploy both projects, clear Laravel's cached views/configuration (`php artisan optimize:clear`), and restart the bot and its outbox worker. This update needs no additional database migration beyond the existing bot integration tables. See the sibling project's `docs/deployment-checklist.md`. Restarting only the bot does not update the CRM website on the server.
 
 ## Checks
 

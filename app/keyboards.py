@@ -4,7 +4,7 @@ from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🆕 Yangi xizmat"), KeyboardButton(text="📎 Hujjat yuborish")],
+            [KeyboardButton(text="📝 Yangi murojaat")],
             [KeyboardButton(text="📦 Buyurtmam"), KeyboardButton(text="💬 Talab va taklif")],
             [KeyboardButton(text="👩‍💼 Operator"), KeyboardButton(text="📍 Manzil va ish vaqti")],
             [KeyboardButton(text="ℹ️ Foydali ma’lumotlar")],
@@ -13,7 +13,7 @@ def main_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def suggestions_keyboard() -> ReplyKeyboardMarkup:
+def back_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="⬅️ Bosh menyu")]],
         resize_keyboard=True,
@@ -28,11 +28,13 @@ def contact_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def confirmation_keyboard() -> ReplyKeyboardMarkup:
+def intake_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="✅ Tasdiqlayman"), KeyboardButton(text="✏️ Qayta boshlash")]],
+        keyboard=[
+            [KeyboardButton(text="📱 Kontaktni yuborish va jo‘natish", request_contact=True)],
+            [KeyboardButton(text="⬅️ Bosh menyu")],
+        ],
         resize_keyboard=True,
-        one_time_keyboard=True,
     )
 
 

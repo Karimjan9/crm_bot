@@ -59,6 +59,7 @@ class CrmClient:
                 "telegram_file_id": attachment["telegram_file_id"],
                 "telegram_message_id": str(attachment["telegram_message_id"]),
                 "kind": attachment["kind"],
+                "caption": attachment.get("caption") or "",
             },
             files={
                 "file": (

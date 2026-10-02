@@ -80,7 +80,12 @@ async def lifespan(app: FastAPI):
     )
     runtime = Runtime(settings=settings, crm=crm, storage=BotStorage(redis))
     register_runtime(bot, runtime)
-    dispatcher = Dispatcher(storage=RedisStorage(redis, state_ttl=timedelta(hours=settings.redis_state_ttl_hours), data_ttl=timedelta(hours=settings.redis_state_ttl_hours)))
+    fsm_storage = RedisStorage(
+        redis,
+        state_ttl=timedelta(hours=settings.redis_state_ttl_hours),
+        data_ttl=timedelta(hours=settings.redis_state_ttl_hours),
+    )
+    dispatcher = Dispatcher(storage=fsm_storage, events_isolation=fsm_storage.create_isolation())
     dispatcher.include_router(router)
     app.state.bot = bot
     app.state.dispatcher = dispatcher

@@ -1,13 +1,13 @@
 import asyncio
 import json
 import logging
-from io import BytesIO
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from redis.asyncio import Redis
 
+from app.attachments import download_attachment
 from app.config import get_settings
 from app.crm import CrmApiError, CrmClient
 from app.runtime import Runtime, register_runtime, unregister_runtime
@@ -18,15 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 async def upload_attachment(bot: Bot, crm: CrmClient, lead_id: int | str, attachment: dict) -> None:
-    remote = await bot.get_file(attachment["telegram_file_id"])
-    content = (await bot.download_file(remote.file_path, destination=BytesIO())).getvalue()
+    content = await download_attachment(bot, attachment)
     await crm.upload_attachment(lead_id, attachment, content)
 
 
 async def upload_message_attachment(bot: Bot, crm: CrmClient, payload: dict) -> None:
     attachment = payload["attachment"]
-    remote = await bot.get_file(attachment["telegram_file_id"])
-    content = (await bot.download_file(remote.file_path, destination=BytesIO())).getvalue()
+    content = await download_attachment(bot, attachment)
     await crm.upload_message_attachment(payload, content)
 
 
@@ -36,6 +34,7 @@ async def process_job(bot: Bot, runtime: Runtime, action: str, payload: dict) ->
         result = await crm.create_lead(payload)
         lead = result.get("data", result)
         lead_id = lead["id"]
+        await runtime.storage.set_lead_id(int(payload["customer"]["telegram_chat_id"]), lead_id)
         for attachment in payload.get("attachments", []):
             await upload_attachment(bot, crm, lead_id, attachment)
     elif action == "attachment":
