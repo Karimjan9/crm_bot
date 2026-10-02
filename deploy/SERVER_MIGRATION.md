@@ -46,6 +46,12 @@ Send `/start` and choose `Operator`. On a first visit the bot collects inquiry t
 
 As super-admin, open `Operatorlar` in the CRM sidebar. Confirm the name, phone, full inquiry text and receipt time, try search/status filters, and change a request to `Bog‘lanildi` or `Yakunlandi`. Changes record the administrator and time and update the corresponding response task. Retrying the same request does not create duplicates or reset a handled request.
 
+## Update the branch directory
+
+Deploy CRM first using its `deploy.sh`, then pull and rebuild the bot as above. This directory update uses the existing filial columns and introduces no new migration. The authenticated `/api/v1/bot/content/branches` response reads the current filial address, phone, opening/closing times, working days and upcoming closure dates; it retains `text` for older bot versions and also supplies public structured `data`. It is not cached and does not use the old static `branches` bot text.
+
+Edit a filial in CRM's `Filiallar` section, then press `Manzil va ish vaqti` in Telegram to confirm the updated address and schedule. Missing opening or closing times use `09:00` or `18:00`. If there are no filials, no address is invented; the response shows standard hours and asks the customer to contact the operator. Other customer-facing bot texts remain editable under bot content.
+
 ## If the server fails during handover
 
 Stop the server `bot` and `worker` before restarting the local instance. The local polling bot deletes the Telegram webhook on startup. If the server received new updates or queue jobs, preserve and transfer that bot state before rolling back; use the latest state and avoid running two workers against separate copies of the same jobs.

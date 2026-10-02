@@ -1,6 +1,6 @@
 # CRM Document Telegram bot
 
-Python 3.11+ customer bot for the sibling `Crm_document` Laravel project. It uses **aiogram**, **FastAPI** and **Redis**. Customer, order and payment data stay in Laravel; Redis only holds Telegram FSM state, webhook deduplication and retry jobs.
+Python 3.11+ customer bot for the sibling `Crm_document` Laravel project. It uses **aiogram**, **FastAPI** and **Redis**. Customer, order and payment data stay in Laravel; Redis holds Telegram FSM state, remembered verified contacts, webhook deduplication and retry jobs.
 
 ## What is implemented
 
@@ -8,6 +8,7 @@ Python 3.11+ customer bot for the sibling `Crm_document` Laravel project. It use
 - customer matching by normalized phone and idempotent lead creation in CRM, with the intake transcript and source retained;
 - contact-verified order lookup that renders only customer-safe fields;
 - a “Talab va taklif” menu that collects customer requests and suggestions and records them in CRM;
+- live branch addresses, phone numbers and working schedules from CRM, with `09:00–18:00` for missing hours;
 - operator handoff stops automatic replies and forwards subsequent messages;
 - explicit marketing opt-in/out, editable CRM content, and honest out-of-hours wording;
 - signed CRM-to-bot webhook endpoint, seven-day event idempotency and persistent Redis retry queue;
@@ -16,6 +17,8 @@ Python 3.11+ customer bot for the sibling `Crm_document` Laravel project. It use
 The “Yangi murojaat” button combines service requests and document uploads. Customers send a description or up to 10 files, then share their own contact to submit the lead. Their name comes from their Telegram profile. Text and file captions are retained in CRM notes, and each file also retains its own caption. Additional files and comments can be added before sharing the contact. Marketing consent is optional and is requested after submission.
 
 Requests use `request.mode=compact`. The updated CRM allows document type and urgency to be empty for employee clarification and shows the text, verified contact and private files together under “Telegram murojaati” on the leads page. It creates a response task for the assigned employee. The bot keeps the older required fields with “Mutaxassis aniqlashtiradi” until the server is updated; the updated CRM converts those placeholders to empty values.
+
+“Manzil va ish vaqti” calls `/api/v1/bot/content/branches` on every button press. CRM builds both the structured directory and the text from the current filial records, including working days and upcoming closure dates in `Asia/Tashkent`. Missing opening or closing times default to `09:00` and `18:00`. Edit these fields in CRM's `Filiallar` section; static `branches` bot text is no longer used. Large directories are split into Telegram messages. If the CRM cannot be reached, the bot shows standard hours and directs the customer to the operator for the address and confirmed schedule.
 
 ## Local run
 

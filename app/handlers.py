@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.attachments import download_attachment
 from app.crm import CrmApiError, CrmClient
-from app.formatters import after_hours_text, safe_order_text
+from app.formatters import after_hours_text, branch_messages, safe_order_text
 from app.keyboards import (
     back_keyboard,
     contact_keyboard,
@@ -509,9 +509,10 @@ async def branches(message: Message) -> None:
     crm, _ = _services(message)
     try:
         content = await crm.content("branches")
-        await message.answer(str(content.get("text", "Manzil ma’lumoti yangilanmoqda.")), reply_markup=main_menu())
     except CrmApiError:
-        await message.answer("Manzil va ish vaqti ma’lumotini operator aniqlashtirib beradi.", reply_markup=main_menu())
+        content = {}
+    for text in branch_messages(content):
+        await message.answer(text, reply_markup=main_menu())
 
 
 @router.message(F.text == "ℹ️ Foydali ma’lumotlar")
