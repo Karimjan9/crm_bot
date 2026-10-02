@@ -30,6 +30,8 @@ uvicorn app.main:app --reload --port 8000
 
 Use `BOT_MODE=polling` for local development. For production set `BOT_MODE=webhook`, a real `PUBLIC_BASE_URL`, `TELEGRAM_WEBHOOK_SECRET`, `CRM_BOT_API_KEY`, and a long random `CRM_WEBHOOK_SECRET`.
 
+`Operator` collects the inquiry text and the customer's own Telegram contact. A verified contact is remembered outside the conversation state and reused across operator inquiries, order lookup and new intakes, including after `/start` or a bot restart. Previous verified CRM intake contacts can also be restored through the authenticated contact API. CRM stores operator requests independently of leads and lists them under the super-admin-only `Operatorlar` sidebar entry, with search, status filters and tracked status changes. Deploy the CRM schema/API update before updating the bot; see `deploy/SERVER_MIGRATION.md`.
+
 Run the worker separately:
 
 ```powershell

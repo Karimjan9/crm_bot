@@ -28,6 +28,20 @@ class BotStorage:
     async def lead_id(self, chat_id: int) -> str | None:
         return await self.redis.get(f"crm-bot:lead:{chat_id}")
 
+    async def save_verified_contact(self, chat_id: int, user_id: int, phone: str) -> None:
+        # Keep the contact outside FSM data so /start and completed flows preserve it.
+        await self.redis.set(
+            f"crm-bot:contact:{chat_id}",
+            json.dumps({"user_id": user_id, "phone": phone}, ensure_ascii=False),
+        )
+
+    async def verified_phone(self, chat_id: int, user_id: int) -> str | None:
+        raw = await self.redis.get(f"crm-bot:contact:{chat_id}")
+        if not raw:
+            return None
+        contact = json.loads(raw)
+        return contact.get("phone") if contact.get("user_id") == user_id else None
+
     async def enqueue(self, action: str, payload: dict[str, Any], attempts: int = 0) -> None:
         job = json.dumps({"action": action, "payload": payload, "attempts": attempts, "queued_at": int(time.time())}, ensure_ascii=False)
         await self.redis.lpush("crm-bot:outbox", job)

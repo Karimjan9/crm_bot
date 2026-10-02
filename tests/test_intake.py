@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 from io import BytesIO
 from types import SimpleNamespace
@@ -34,11 +35,15 @@ async def test_two_step_intake_submits_text_and_files_with_verified_contact():
         create_lead=AsyncMock(return_value={"data": {"id": 456}}),
         upload_attachment=AsyncMock(),
         operator_request=AsyncMock(),
+        verified_contact=AsyncMock(return_value=None),
     )
-    storage = SimpleNamespace(set_lead_id=AsyncMock(), enqueue=AsyncMock())
+    storage = SimpleNamespace(
+        set_lead_id=AsyncMock(), enqueue=AsyncMock(),
+        verified_phone=AsyncMock(return_value=None), save_verified_contact=AsyncMock(),
+    )
     register_runtime(bot, Runtime(settings=settings, crm=crm, storage=storage))
     dispatcher = Dispatcher(storage=MemoryStorage(), events_isolation=SimpleEventIsolation())
-    dispatcher.include_router(router)
+    dispatcher.include_router(deepcopy(router))
     state = dispatcher.fsm.get_context(bot=bot, chat_id=chat.id, user_id=user.id)
     own_contact = Contact(phone_number="+998900000001", first_name="Ali", user_id=user.id)
     document = Document(

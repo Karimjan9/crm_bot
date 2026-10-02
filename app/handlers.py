@@ -41,6 +41,11 @@ class OrderVerification(StatesGroup):
     contact = State()
 
 
+class OperatorRequest(StatesGroup):
+    text = State()
+    contact = State()
+
+
 class Suggestions(StatesGroup):
     text = State()
 
@@ -98,20 +103,89 @@ async def _create_lead_and_upload(message: Message, payload: dict[str, Any]) -> 
     return True
 
 
-async def _request_operator(message: Message, reason: str) -> None:
+async def _saved_phone(message: Message) -> str | None:
+    if not message.from_user:
+        return None
     crm, storage = _services(message)
-    await storage.set_human_handoff(message.chat.id)
+    phone = await storage.verified_phone(message.chat.id, message.from_user.id)
+    if phone:
+        return phone
+    try:
+        phone = await crm.verified_contact(message.chat.id, message.from_user.id)
+    except CrmApiError:
+        return None
+    if phone:
+        await storage.save_verified_contact(message.chat.id, message.from_user.id, phone)
+    return phone
+
+
+async def _remember_contact(message: Message) -> str | None:
+    phone = await _owned_contact(message)
+    if phone:
+        _, storage = _services(message)
+        await storage.save_verified_contact(message.chat.id, message.from_user.id, phone)
+    return phone
+
+
+async def _submit_operator_request(message: Message, state: FSMContext, phone: str) -> None:
+    data = await state.get_data()
+    crm, storage = _services(message)
     await _dispatch(
         storage,
         crm,
         "operator_request",
-        {**_identity(message), "reason": reason, "telegram_message_id": message.message_id},
+        {
+            **_identity(message),
+            "external_id": data["operator_request_id"],
+            "reason": data.get("operator_reason", "customer_requested_operator"),
+            "text": data["operator_text"],
+            "telegram_message_id": message.message_id,
+            "customer": {
+                **_identity(message),
+                "name": message.from_user.full_name[:160],
+                "phone": phone,
+                "phone_verified": True,
+            },
+        },
     )
+    await storage.set_human_handoff(message.chat.id)
+    await state.clear()
+    await state.update_data(entry_payload=data.get("entry_payload"))
     settings = runtime_for(message.bot).settings
     note = after_hours_text(
         datetime.now(ZoneInfo(settings.default_timezone)), settings.workday_start, settings.workday_end
     )
-    await message.answer(note or "Operatorimizga xabar yubordik. Tez orada siz bilan bog‘lanamiz.")
+    text = "Murojaatingiz qabul qilindi. Operator sizga bog‘lanadi."
+    if note:
+        text += "\n" + note
+    await message.answer(text, reply_markup=main_menu())
+
+
+async def _begin_operator_request(
+    message: Message, state: FSMContext, text: str | None = None,
+    reason: str = "customer_requested_operator",
+) -> None:
+    previous = await state.get_data()
+    await state.clear()
+    await state.update_data(
+        entry_payload=previous.get("entry_payload"),
+        operator_request_id=str(uuid4()), operator_reason=reason,
+    )
+    await state.set_state(OperatorRequest.text)
+    if text:
+        await _accept_operator_text(message, state, text)
+        return
+    await message.answer(
+        "Operatorga murojaatingizni yozing.\n"
+        "Masalan: «Diplom tarjimasi narxi va tayyor bo‘lish muddatini bilmoqchiman». "
+        "Yoki: «Buyurtmam bo‘yicha yordam kerak».",
+        reply_markup=back_keyboard(),
+    )
+
+
+@router.message(F.text == "👩‍💼 Operator")
+async def operator_shortcut(message: Message, state: FSMContext) -> None:
+    await _begin_operator_request(message, state)
 
 
 @router.message(CommandStart())
@@ -149,22 +223,47 @@ async def begin_intake(message: Message, state: FSMContext) -> None:
         notes="",
     )
     await state.set_state(Intake.request)
+    contact_note = (
+        "Kontaktingiz saqlangan. Yakunda «📨 Murojaatni jo‘natish» tugmasini bosing."
+        if await _saved_phone(message)
+        else "Keyin o‘z kontaktingizni yuborsangiz, murojaatingiz mutaxassisga jo‘natiladi."
+    )
     await message.answer(
         "Kerakli xizmatni qisqacha yozing yoki hujjat rasmini/PDF faylni yuboring.\n"
         "Masalan: “Diplomni ingliz tiliga tarjima qilish kerak, 3 kun ichida”.\n"
-        "Keyin o‘z kontaktingizni yuborsangiz, murojaatingiz mutaxassisga jo‘natiladi.",
+        + contact_note,
         reply_markup=back_keyboard(),
     )
 
 
-@router.message(
-    StateFilter(Intake.request, Intake.contact, Suggestions.text), F.text == "⬅️ Bosh menyu"
-)
+@router.message(F.text == "⬅️ Bosh menyu")
 async def return_to_menu(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await state.clear()
     await state.update_data(entry_payload=data.get("entry_payload"))
     await message.answer("Kerakli bo‘limni tanlang.", reply_markup=main_menu())
+
+
+async def _intake_ready(message: Message, prefix: str) -> None:
+    saved = bool(await _saved_phone(message))
+    instruction = (
+        "Kontaktingiz saqlangan. Jo‘natish uchun «📨 Murojaatni jo‘natish» tugmasini bosing."
+        if saved
+        else "Murojaatni jo‘natish uchun pastdagi tugma orqali o‘z kontaktingizni yuboring."
+    )
+    await message.answer(
+        prefix + " Yana fayl yoki izoh qo‘shishingiz mumkin. " + instruction,
+        reply_markup=intake_keyboard(contact_saved=saved),
+    )
+
+
+@router.message(Intake.contact, F.text == "📨 Murojaatni jo‘natish")
+async def submit_intake_saved(message: Message, state: FSMContext) -> None:
+    phone = await _saved_phone(message)
+    if not phone:
+        await message.answer("O‘z kontaktingizni yuboring.", reply_markup=intake_keyboard())
+        return
+    await _submit_intake(message, state, phone)
 
 
 @router.message(StateFilter(Intake.request, Intake.contact), F.text)
@@ -180,11 +279,7 @@ async def intake_text(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(notes=notes, transcript=_append(data, "request", text))
     await state.set_state(Intake.contact)
-    await message.answer(
-        "Qabul qilindi. Yana fayl yoki izoh qo‘shishingiz mumkin. "
-        "Murojaatni jo‘natish uchun pastdagi tugma orqali o‘z kontaktingizni yuboring.",
-        reply_markup=intake_keyboard(),
-    )
+    await _intake_ready(message, "Qabul qilindi.")
 
 
 def _attachment_from_message(message: Message) -> dict[str, Any] | None:
@@ -244,11 +339,7 @@ async def intake_attachment(message: Message, state: FSMContext) -> None:
         transcript=_append(data, "attachment", attachment["file_name"]),
     )
     await state.set_state(Intake.contact)
-    await message.answer(
-        "Hujjat qabul qilindi. Yana fayl yoki izoh qo‘shishingiz mumkin. "
-        "Murojaatni jo‘natish uchun pastdagi tugma orqali o‘z kontaktingizni yuboring.",
-        reply_markup=intake_keyboard(),
-    )
+    await _intake_ready(message, "Hujjat qabul qilindi.")
 
 
 async def _owned_contact(message: Message) -> str | None:
@@ -260,10 +351,14 @@ async def _owned_contact(message: Message) -> str | None:
 
 @router.message(StateFilter(Intake.request, Intake.contact), F.contact)
 async def submit_intake(message: Message, state: FSMContext) -> None:
-    phone = await _owned_contact(message)
+    phone = await _remember_contact(message)
     if not phone:
         await message.answer("Xavfsizlik uchun faqat o‘zingizning Telegram kontaktingizni yuboring.")
         return
+    await _submit_intake(message, state, phone)
+
+
+async def _submit_intake(message: Message, state: FSMContext, phone: str) -> None:
     data = await state.get_data()
     if not data.get("notes") and not data.get("attachments"):
         await message.answer("Avval murojaatingizni yozing yoki hujjat rasmini/PDF faylni yuboring.")
@@ -308,21 +403,31 @@ async def intake_message_required(message: Message) -> None:
 
 @router.message(F.text == "📦 Buyurtmam")
 async def request_orders(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    phone = await _saved_phone(message)
+    if phone:
+        await _show_orders(message, state, phone)
+        return
     await state.set_state(OrderVerification.contact)
     await message.answer("Buyurtmalaringizni ko‘rish uchun o‘z kontaktingizni yuboring.", reply_markup=contact_keyboard())
 
 
 @router.message(OrderVerification.contact, F.contact)
 async def show_orders(message: Message, state: FSMContext) -> None:
-    phone = await _owned_contact(message)
+    phone = await _remember_contact(message)
     if not phone:
         await message.answer("Faqat o‘zingizga tegishli Telegram kontaktini yuboring.")
         return
+    await _show_orders(message, state, phone)
+
+
+async def _show_orders(message: Message, state: FSMContext, phone: str) -> None:
     crm, _ = _services(message)
     try:
         orders = await crm.orders(message.chat.id, phone)
     except CrmApiError:
-        await message.answer("Buyurtma holatini hozir tekshirib bo‘lmadi. Birozdan keyin urinib ko‘ring.")
+        await state.clear()
+        await message.answer("Buyurtma holatini hozir tekshirib bo‘lmadi. Birozdan keyin urinib ko‘ring.", reply_markup=main_menu())
         return
     await state.clear()
     if not orders:
@@ -336,9 +441,50 @@ async def order_contact_required(message: Message) -> None:
     await message.answer("Buyurtmalarni ko‘rish uchun o‘z kontaktingizni yuboring.")
 
 
-@router.message(F.text == "👩‍💼 Operator")
-async def operator_shortcut(message: Message) -> None:
-    await _request_operator(message, "customer_requested_operator")
+async def _accept_operator_text(message: Message, state: FSMContext, text: str) -> None:
+    text = text.strip()
+    if not text or len(text) > 2000:
+        await message.answer("Murojaatingizni 1–2000 belgidan iborat matn ko‘rinishida yozing.")
+        return
+    data = await state.get_data()
+    previous = data.get("operator_text", "")
+    text = "\n".join(part for part in (previous, text) if part)
+    if len(text) > 2000:
+        await message.answer("Murojaat va izohlar jami 2000 belgidan oshmasin.")
+        return
+    await state.update_data(operator_text=text)
+    phone = await _saved_phone(message)
+    if phone:
+        await _submit_operator_request(message, state, phone)
+        return
+    await state.set_state(OperatorRequest.contact)
+    await message.answer(
+        "Operator sizga bog‘lanishi uchun o‘z kontaktingizni yuboring. "
+        "Kontaktingiz saqlanadi va keyingi safar qayta so‘ralmaydi.",
+        reply_markup=contact_keyboard(),
+    )
+
+
+@router.message(StateFilter(OperatorRequest.text, OperatorRequest.contact), F.text)
+async def operator_text(message: Message, state: FSMContext) -> None:
+    await _accept_operator_text(message, state, message.text or "")
+
+
+@router.message(StateFilter(OperatorRequest.text, OperatorRequest.contact), F.contact)
+async def operator_contact(message: Message, state: FSMContext) -> None:
+    phone = await _remember_contact(message)
+    if not phone:
+        await message.answer("Faqat o‘zingizning Telegram kontaktingizni yuboring.")
+        return
+    if not (await state.get_data()).get("operator_text"):
+        await message.answer("Kontaktingiz saqlandi. Endi operatorga murojaatingizni yozing.", reply_markup=back_keyboard())
+        return
+    await _submit_operator_request(message, state, phone)
+
+
+@router.message(StateFilter(OperatorRequest.text, OperatorRequest.contact))
+async def operator_message_required(message: Message) -> None:
+    await message.answer("Operatorga murojaat matnini yoki o‘z kontaktingizni yuboring.")
 
 
 @router.message(F.text.in_({"✅ Roziman", "❌ Kerak emas"}))
@@ -399,6 +545,14 @@ async def submit_suggestion(message: Message, state: FSMContext) -> None:
     await message.answer("Murojaatingiz qabul qilindi. Rahmat!", reply_markup=main_menu())
 
 
+@router.message(Suggestions.text, F.contact)
+async def suggestion_contact(message: Message) -> None:
+    if not await _remember_contact(message):
+        await message.answer("Faqat o‘zingizning Telegram kontaktingizni yuboring.")
+        return
+    await message.answer("Kontaktingiz saqlandi. Endi talab yoki taklifingizni yozing.", reply_markup=back_keyboard())
+
+
 @router.message(Suggestions.text)
 async def suggestion_text_required(message: Message) -> None:
     await message.answer("Talab yoki taklifingizni matn ko‘rinishida yuboring.")
@@ -420,15 +574,23 @@ async def forward_attachment(message: Message) -> None:
     await message.answer("Faylingiz qabul qilindi va mutaxassisga yuborildi.", reply_markup=main_menu())
 
 
+@router.message(F.contact)
+async def remember_shared_contact(message: Message) -> None:
+    if not await _remember_contact(message):
+        await message.answer("Faqat o‘zingizning Telegram kontaktingizni yuboring.")
+        return
+    await message.answer("Kontaktingiz saqlandi. Keyingi safar qayta so‘ralmaydi.", reply_markup=main_menu())
+
+
 @router.message()
-async def forward_message(message: Message) -> None:
+async def forward_message(message: Message, state: FSMContext) -> None:
     if not message.text:
         return
     crm, storage = _services(message)
     text = message.text[:4000]
     is_operator_request = any(word in text.casefold() for word in OPERATOR_WORDS)
     if is_operator_request:
-        await _request_operator(message, "keyword_request")
+        await _begin_operator_request(message, state, text[:2000], "keyword_request")
         return
     await _dispatch(
         storage,

@@ -99,6 +99,12 @@ class CrmClient:
     async def operator_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/bot/operator-requests", json=payload)
 
+    async def verified_contact(self, chat_id: int, user_id: int) -> str | None:
+        response = await self._request(
+            "GET", f"/bot/contacts/{chat_id}", params={"telegram_user_id": str(user_id)}
+        )
+        return (response.get("data") or {}).get("phone")
+
     async def marketing_consent(self, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("PUT", "/bot/marketing-consents", json=payload)
 

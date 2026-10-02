@@ -25,6 +25,27 @@ The server needs SSH access, Docker Engine with the Compose plugin, and access t
 
 Do not disable or remove the local Redis service if another project uses it. Keep local source files and `.env`; stopping the processes is sufficient.
 
+## Update operator requests and remembered contacts
+
+Deploy the CRM update first. It adds the `operator_requests` table, the super-admin-only `/operators` page, and the authenticated contact lookup used to restore a previously verified Telegram contact. Follow the Laravel project's deployment procedure so the database is backed up before migrations:
+
+```bash
+cd /var/www/crm_document
+bash deploy.sh
+```
+
+Once the CRM deployment succeeds, update the bot without recreating its Redis volume:
+
+```bash
+cd /var/www/crm_bot
+git pull --ff-only
+docker compose up -d --build --wait --wait-timeout 120 bot worker
+```
+
+Send `/start` and choose `Operator`. On a first visit the bot collects inquiry text and the customer's own Telegram contact, then confirms `Operator sizga bog‘lanadi.` A remembered contact skips the contact step. The same contact is reused by `Buyurtmam` and `Yangi murojaat`; the latter shows a send button instead of requesting the phone again. Verified contacts from earlier CRM intakes are restored automatically. Contact keys have no expiry and are included in Redis state exports; Docker Redis persistence preserves them through normal restarts.
+
+As super-admin, open `Operatorlar` in the CRM sidebar. Confirm the name, phone, full inquiry text and receipt time, try search/status filters, and change a request to `Bog‘lanildi` or `Yakunlandi`. Changes record the administrator and time and update the corresponding response task. Retrying the same request does not create duplicates or reset a handled request.
+
 ## If the server fails during handover
 
 Stop the server `bot` and `worker` before restarting the local instance. The local polling bot deletes the Telegram webhook on startup. If the server received new updates or queue jobs, preserve and transfer that bot state before rolling back; use the latest state and avoid running two workers against separate copies of the same jobs.
