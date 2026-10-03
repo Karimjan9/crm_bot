@@ -5,15 +5,21 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, LinkPreviewOptions, Message
 
 from app.attachments import download_attachment
 from app.crm import CrmApiError, CrmClient
 from app.formatters import after_hours_text, branch_messages, safe_order_text
+from app.information import (
+    information_catalog,
+    information_home,
+    information_keyboard,
+    information_topic,
+)
 from app.keyboards import (
     back_keyboard,
     contact_keyboard,
@@ -199,6 +205,22 @@ async def start(message: Message, state: FSMContext) -> None:
         "yoki savolingizni shu yerga yozing.",
         reply_markup=main_menu(),
     )
+
+
+@router.message(F.text == "ℹ️ Foydali ma’lumotlar")
+async def useful_info(message: Message) -> None:
+    crm, _ = _services(message)
+    try:
+        content = await crm.content("useful-information")
+    except CrmApiError:
+        content = {}
+    catalog = information_catalog(content)
+    texts = information_home(catalog)
+    for index, text in enumerate(texts):
+        await message.answer(
+            text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True),
+            reply_markup=information_keyboard(catalog) if index == len(texts) - 1 else None,
+        )
 
 
 @router.message(F.text == "💬 Talab va taklif")
@@ -515,16 +537,6 @@ async def branches(message: Message) -> None:
         await message.answer(text, reply_markup=main_menu())
 
 
-@router.message(F.text == "ℹ️ Foydali ma’lumotlar")
-async def useful_info(message: Message) -> None:
-    crm, _ = _services(message)
-    try:
-        content = await crm.content("useful-information")
-        await message.answer(str(content.get("text", "Kerakli ma’lumotni operator aytib beradi.")), reply_markup=main_menu())
-    except CrmApiError:
-        await message.answer("Hujjatni yuboring — mutaxassis sizga aynan kerakli tartibni aytadi.", reply_markup=main_menu())
-
-
 @router.message(Suggestions.text, F.text)
 async def submit_suggestion(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
@@ -601,6 +613,48 @@ async def forward_message(message: Message, state: FSMContext) -> None:
     )
     if not await storage.has_human_handoff(message.chat.id):
         await message.answer("Xabaringiz qabul qilindi. Kerak bo‘lsa “Operator” tugmasini bosing.", reply_markup=main_menu())
+
+
+@router.callback_query(F.data.startswith("info:"))
+async def information_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not isinstance(callback.message, Message) or callback.message.chat.type != "private" or callback.message.chat.id != callback.from_user.id:
+        await callback.answer("Ma’lumotni botning shaxsiy chatida oching.", show_alert=True)
+        return
+    data = callback.data or ""
+    if data not in {"info:home", "info:intake"} and not data.startswith("info:topic:"):
+        await callback.answer("Tugmani qayta oching.", show_alert=True)
+        return
+    await callback.answer()
+    if data == "info:intake":
+        # A callback message belongs to the bot; use the person who pressed the
+        # button so contact lookup and subsequent intake use the correct user.
+        user_message = callback.message.model_copy(update={"from_user": callback.from_user}).as_(callback.bot)
+        await begin_intake(user_message, state)
+        return
+    runtime = runtime_for(callback.bot)
+    try:
+        content = await runtime.crm.content("useful-information")
+    except CrmApiError:
+        content = {}
+    catalog = information_catalog(content)
+    topic = next((item for item in catalog["topics"] if "info:topic:" + item["id"] == data), None)
+    texts = information_topic(topic) if topic else information_home(catalog)
+    if data.startswith("info:topic:") and topic is None:
+        texts[0] = "<i>Mavzu yangilangan yoki hozircha mavjud emas.</i>\n\n" + texts[0]
+    keyboard = information_keyboard(catalog, back=topic is not None)
+    for index, text in enumerate(texts):
+        options = {
+            "parse_mode": "HTML", "link_preview_options": LinkPreviewOptions(is_disabled=True),
+            "reply_markup": keyboard if index == len(texts) - 1 else None,
+        }
+        if index == 0:
+            try:
+                await callback.message.edit_text(text, **options)
+            except TelegramBadRequest as error:
+                if "message is not modified" not in error.message.casefold():
+                    await callback.message.answer(text, **options)
+        else:
+            await callback.message.answer(text, **options)
 
 
 @router.callback_query(F.data.startswith("feedback:"))

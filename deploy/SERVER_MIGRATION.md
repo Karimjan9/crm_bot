@@ -52,6 +52,27 @@ Deploy CRM first using its `deploy.sh`, then pull and rebuild the bot as above. 
 
 Edit a filial in CRM's `Filiallar` section, then press `Manzil va ish vaqti` in Telegram to confirm the updated address and schedule. Missing opening or closing times use `09:00` or `18:00`. If there are no filials, no address is invented; the response shows standard hours and asks the customer to contact the operator. Other customer-facing bot texts remain editable under bot content.
 
+## Useful information library updates
+
+Deploy CRM first:
+
+```bash
+cd /var/www/crm_document
+bash deploy.sh
+```
+
+Then rebuild the bot and worker:
+
+```bash
+cd /var/www/crm_bot
+git pull --ff-only
+docker compose up -d --build --wait --wait-timeout 120 bot worker
+```
+
+CRM's **Bot ma’lumotlari** opens `/bot-useful-information` for super-admins and admin-managers. Save the introduction, published topics, checklists and tips there; select any topic in the live preview. The API publishes only enabled topics in their saved order, and the next Telegram press reads the current data. The defaults explain clear document photos, compact intake and asking about price/deadlines; admins may customize or hide them. Existing plain text is preserved, and existing `bot_contents.metadata` stores the library without a new migration.
+
+Verify in Telegram: press **Foydali ma’lumotlar**, open a topic, change it in CRM and open it again, then use **Yangi murojaat**. A previously verified contact should still be remembered. Keep the local polling bot stopped during this server update.
+
 ## If the server fails during handover
 
 Stop the server `bot` and `worker` before restarting the local instance. The local polling bot deletes the Telegram webhook on startup. If the server received new updates or queue jobs, preserve and transfer that bot state before rolling back; use the latest state and avoid running two workers against separate copies of the same jobs.

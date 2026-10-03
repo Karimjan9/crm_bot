@@ -62,6 +62,12 @@ The required Laravel endpoints are implemented in the sibling `Crm_document` pro
 
 For the compact intake update, deploy both projects, clear Laravel's cached views/configuration (`php artisan optimize:clear`), and restart the bot and its outbox worker. This update needs no additional database migration beyond the existing bot integration tables. See the sibling project's `docs/deployment-checklist.md`. Restarting only the bot does not update the CRM website on the server.
 
+## Useful information library
+
+“Foydali ma’lumotlar” reads the authenticated `/api/v1/bot/content/useful-information` API on each opening, topic selection and return to the menu. CRM's **Bot ma’lumotlari** sidebar opens the library editor with a live Telegram preview. Admins can edit the introduction and up to 12 topics, choose icons, add a short summary, checklist and tip, reorder topics and hide drafts. The bot shows inline topic buttons, escaped HTML headings, checklists and tips, plus a direct **Yangi murojaat** button that reuses the customer's saved contact. Browsing preserves an unfinished intake.
+
+Old text-only API responses still display correctly. Large content splits into balanced HTML messages within Telegram's limit; unavailable content directs the customer to an intake or operator. Deploy CRM first, then rebuild the bot and worker; see [the server migration guide](deploy/SERVER_MIGRATION.md#useful-information-library-updates). The existing `bot_contents.metadata` stores topics, so this feature needs no new migration.
+
 ## Checks
 
 ```powershell
