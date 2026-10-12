@@ -70,6 +70,8 @@ Old text-only API responses still display correctly. Large content splits into b
 
 ## Checks
 
+`/health` checks both Redis and the authenticated CRM branch API. It returns HTTP 503 with a failed dependency name when either connection fails, so Docker health reflects whether the bot can work with CRM. Each dependency probe has a two-second timeout; credentials and internal error details are omitted from the response.
+
 ```powershell
 python -m compileall app
 pytest

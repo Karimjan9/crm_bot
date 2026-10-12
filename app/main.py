@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
 from app.config import get_settings
@@ -119,10 +120,22 @@ app = FastAPI(title="CRM Document Telegram Bot", lifespan=lifespan, root_path="/
 
 
 @app.get("/health")
-async def health(request: Request) -> dict[str, str]:
+async def health(request: Request) -> JSONResponse:
     runtime: Runtime = request.app.state.runtime
-    await runtime.storage.redis.ping()
-    return {"status": "ok"}
+    results = await asyncio.gather(
+        asyncio.wait_for(runtime.storage.redis.ping(), timeout=2),
+        asyncio.wait_for(runtime.crm.content("branches"), timeout=2),
+        return_exceptions=True,
+    )
+    checks = {
+        name: "failed" if isinstance(result, BaseException) else "ok"
+        for name, result in zip(("redis", "crm"), results, strict=True)
+    }
+    healthy = all(value == "ok" for value in checks.values())
+    return JSONResponse(
+        {"status": "ok" if healthy else "error", "checks": checks},
+        status_code=200 if healthy else 503,
+    )
 
 
 @app.post("/telegram/webhook")
